@@ -14,8 +14,14 @@ class Settings(BaseSettings):
     BEDROCK_EMBED_MODEL_ID: str
     BEDROCK_EMBED_DIM: int
 
-    # DynamoDB (Session Checkpoints)
-    DYNAMODB_CHECKPOINT_TABLE: str
+    # DynamoDB Tables
+    DYNAMODB_CHECKPOINT_TABLE: str = "chat-checkpoints"
+    DYNAMODB_SESSIONS_TABLE: str = "sessions"
+    DYNAMODB_TICKETS_TABLE: str = "tickets"
+
+    # ITSM Integration (Mock / API Gateway)
+    ITSM_URL: str = "http://localhost:8000/mock-itsm/tickets"
+    ITSM_API_KEY: str = "mock-secret-key-123"
 
     # RDS PostgreSQL (Aurora IAM Auth)
     DB_HOST: str
