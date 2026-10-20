@@ -10,8 +10,17 @@
 
 ```mermaid
 flowchart TD
-    Client["Client / User / Frontend"] -->|"HTTPS + X-Request-ID"| FastAPI["FastAPI Service (app/main.py)"]
-    
+    Client["Client / Web Browser / Mobile"] -->|"HTTP Port 80"| ALB["Application Load Balancer (skyassist-alb)"]
+    ALB -->|"Target Group: Port 8000 (/health)"| Fargate["AWS ECS Fargate Service (skyassist-task)"]
+
+    subgraph Container["Docker Container (Amazon ECR)"]
+        FastAPI["FastAPI Backend (app/main.py)"]
+        WebUI["Bundled Web UI (GET / -> index.html)"]
+        FastAPI --- WebUI
+    end
+
+    Fargate --> Container
+
     subgraph FastAPI_Core["FastAPI Core"]
         Middleware["Request-ID & Logging Middleware"]
         Router["/chat Router (LangChain Agent)"]
@@ -38,7 +47,7 @@ flowchart TD
         Router --> Tool4["search_knowledge_base"]
     end
 
-    subgraph Databases["Persistence & Databases"]
+    subgraph Databases["Persistence & Databases (ap-southeast-2)"]
         Router -->|"Agent Checkpoints"| DDB_Checkpoints["DynamoDB: chat-checkpoints"]
         Router -->|"Session Metadata"| DDB_Sessions["DynamoDB: sessions"]
         Router -->|"Message History"| RDS_Chat["RDS PostgreSQL: chat_messages"]
@@ -69,9 +78,11 @@ flowchart TD
 | **AWS Lambda** | `skyassist-itsm` (`itsm_lambda/handler.py`) | Serverless microservice handling IT ticketing operations (`POST /tickets`, `GET /tickets/{id}`). |
 | **Amazon API Gateway** | HTTP API v2 (`4afwd28wp5`) | Public HTTPS front door routing traffic to the ITSM Lambda, enforcing `x-api-key` authentication and CORS. |
 | **Amazon S3** | `s3` boto3 client | Storage for enterprise policy documents and raw data ingestion. |
-| **Amazon CloudWatch** | CloudWatch Logs | Structured single-line JSON logs with correlated `request_id`, HTTP status, and latency metrics. |
+| **Amazon ECR** | Container Image Registry | Secure private registry hosting multi-stage container images (`skyassist:latest`). |
+| **AWS ECS (Fargate)** | Container Orchestration (Serverless) | Runs the containerized FastAPI service and bundled web UI with 0.5 vCPU and 1 GB RAM, eliminating EC2 server patching. |
+| **AWS Application Load Balancer** | `skyassist-alb` | Public internet entry point routing HTTP traffic on Port 80 to container Port 8000 with continuous `/health` checks. |
+| **Amazon CloudWatch** | CloudWatch Logs (`/ecs/skyassist-task`) | Centralized log group streaming single-line JSON logs with correlated `request_id`, HTTP status, and latency metrics. |
 | **AWS Secrets Manager & SQS** | Client factories in `app/core/aws.py` | Prepared for credential isolation and asynchronous ingestion queues. |
-| **AWS ECS Fargate & ALB** | Container Deployment (Day 1 Block 5) | Serverless Docker container hosting behind an Application Load Balancer. |
 
 ---
 
@@ -211,7 +222,7 @@ Dedicated session index table for user metadata and active session lookups.
 ```
 indian/
 ├── app/
-│   ├── main.py              # FastAPI application, lifespan, request-ID middleware, /health & /ready
+│   ├── main.py              # FastAPI application, lifespan, root UI route (GET /), /health & /ready
 │   ├── core/
 │   │   ├── aws.py           # Centralized Boto3 session & AWSClients factory with retry configs
 │   │   ├── config.py        # Environment variables & runtime settings (Pydantic BaseSettings)
@@ -236,6 +247,10 @@ indian/
 │   ├── test_chat.py         # Pytest suite for /chat, /chat/stream, /sessions, and /auth
 │   ├── test_itsm_lambda.py  # Pytest suite for ITSM Lambda handler & auth
 │   └── test_tools.py        # Pytest suite for flight and ITSM tools input validation & SQL
+├── Dockerfile               # Multi-stage container recipe (builder + non-root runner)
+├── .dockerignore            # Excludes venv, tests, git, and local secrets from Docker images
+├── requirements.txt         # Pinned production dependencies with integrity hashes
+├── index.html               # Responsive airline copilot Web UI (Lucide icons, SSE streaming)
 ├── BUILD_PLAN.md            # Comprehensive 3-day roadmap, scope tiers, and operational guide
 ├── pyproject.toml           # Project dependencies & pytest configuration
 ├── run.bat                  # Local development startup script
@@ -248,15 +263,16 @@ indian/
 
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
+| `GET` | `/` | **Serves the interactive SkyAssist Web UI** directly from the container |
 | `POST` | `/chat` | Standard synchronous agent chat returning complete response and session ID |
 | `POST` | `/chat/stream` | **Real-time SSE streaming:** emits token deltas, tool calls, and token usage metrics |
 | `GET` | `/sessions` | Lists previous chat conversation threads for a user from DynamoDB (for UI sidebar) |
 | `GET` | `/chat/{session_id}` | Retrieves full chronological message history from PostgreSQL (with fallback to DynamoDB) |
 | `DELETE` | `/chat/{session_id}` | Deletes session metadata from DynamoDB and message history from PostgreSQL |
-| `POST` | `/auth/login` | Static login endpoint returning user profile and session bearer token |
+| `POST` | `/auth/login` | Static login endpoint returning user profile and session bearer token (`guest1`/`guest2`) |
 | `GET` | `/auth/me` | Retrieves active user identity from bearer token |
 | `POST` | `/ingest` | Chunk and embed raw text into RDS PostgreSQL (`pgvector`) |
-| `GET` | `/health` | Liveness probe returning process status and app metadata (HTTP 200) |
+| `GET` | `/health` | Liveness probe for ALB and container orchestrator (HTTP 200) |
 | `GET` | `/ready` | Readiness probe validating RDS PostgreSQL connectivity with timeout (HTTP 200 / 503) |
 | `POST` | `/mock-itsm/tickets` | Local stubbed endpoint for IT ticket creation |
 | `GET` | `/mock-itsm/tickets/{id}`| Local stubbed endpoint for IT ticket retrieval |
@@ -298,3 +314,41 @@ FastAPI interactive Swagger docs: **`http://localhost:8000/docs`**
 uv run pytest tests/
 ```
 All **24 unit tests** execute cleanly verifying streaming, auth, session history, auto-rehydration from PostgreSQL, tools, database queries, and Lambda handlers.
+
+---
+
+## Cloud Deployment (AWS ECS Fargate & ALB)
+
+SkyAssist is packaged as an optimized, multi-stage Docker container running serverlessly on **AWS ECS Fargate** behind an **Application Load Balancer (ALB)**.
+
+### Live Cloud Endpoint
+- **Public Application URL:** [`http://skyassist-alb-1144392515.ap-southeast-2.elb.amazonaws.com`](http://skyassist-alb-1144392515.ap-southeast-2.elb.amazonaws.com)
+- **Liveness Health Check:** `http://skyassist-alb-1144392515.ap-southeast-2.elb.amazonaws.com/health`
+- **Default Guest Credentials:**
+  - **Username:** `guest1` or `guest2`
+  - **Password:** `indian2026`
+
+### Container Architecture & Build Flow
+
+1. **Multi-Stage Build (`Dockerfile`)**:
+   - **Stage 1 (`builder`)**: Uses `python:3.13-slim` and `build-essential` to compile wheels and prepare a clean virtual environment at `/opt/venv`.
+   - **Stage 2 (`runner`)**: Uses a minimal runtime footprint, copies `/opt/venv`, creates a dedicated non-root user `appuser` (UID 1001), copies application code and `index.html`, and configures container `HEALTHCHECK`.
+
+2. **Build and Push to Amazon ECR**:
+   ```bash
+   # 1. Authenticate Docker with Amazon ECR
+   aws ecr get-login-password --region ap-southeast-2 | docker login --username AWS --password-stdin 089601768834.dkr.ecr.ap-southeast-2.amazonaws.com
+
+   # 2. Build and tag the multi-stage image
+   docker build -t skyassist:latest .
+   docker tag skyassist:latest 089601768834.dkr.ecr.ap-southeast-2.amazonaws.com/skyassist:latest
+
+   # 3. Push to ECR repository
+   docker push 089601768834.dkr.ecr.ap-southeast-2.amazonaws.com/skyassist:latest
+   ```
+
+3. **ECS Fargate Task & Service**:
+   - **Task Definition (`skyassist-task`)**: 0.5 vCPU, 1 GB RAM, Fargate launch type, container port `8000`.
+   - **Service (`skyassist-task-service`)**: Ensures `1/1` tasks continuously running with rolling deployments.
+   - **Application Load Balancer (`skyassist-alb`)**: Routes internet HTTP traffic on port 80 to container port 8000 across multiple availability zones, continuously executing `/health` checks.
+
