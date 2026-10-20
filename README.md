@@ -10,45 +10,49 @@
 
 ```mermaid
 flowchart TD
-    Client["Client / User / Frontend"] -->|HTTPS + X-Request-ID| FastAPI["FastAPI Service (app/main.py)"]
+    Client["Client / User / Frontend"] -->|"HTTPS + X-Request-ID"| FastAPI["FastAPI Service (app/main.py)"]
     
-    subgraph FastAPI Core
-        Middleware["Request-ID & JSON Logging Middleware"]
+    subgraph FastAPI_Core["FastAPI Core"]
+        Middleware["Request-ID & Logging Middleware"]
         Router["/chat Router (LangChain Agent)"]
         Ingest["/ingest Router (Vector Pipeline)"]
         Health["/health (Liveness) & /ready (Readiness)"]
+        Auth["/auth Router (Login & Me)"]
     end
 
     FastAPI --> Middleware
     Middleware --> Router
     Middleware --> Ingest
     Middleware --> Health
+    Middleware --> Auth
 
-    subgraph AWS AI & Orchestration
-        Router -->|Converse API| Bedrock["Amazon Bedrock (Claude / Llama)"]
-        Ingest -->|Embeddings API| BedrockEmbed["Bedrock Titan Embeddings"]
+    subgraph AWS_AI["AWS AI & Orchestration"]
+        Router -->|"Converse API"| Bedrock["Amazon Bedrock (LLM Reasoning)"]
+        Ingest -->|"Embeddings API"| BedrockEmbed["Bedrock Titan Embeddings"]
     end
 
-    subgraph LangChain Tools
+    subgraph LangChain_Tools["LangChain Tools"]
         Router --> Tool1["get_flight_status"]
         Router --> Tool2["change_booking"]
         Router --> Tool3["create_it_ticket"]
         Router --> Tool4["search_knowledge_base"]
     end
 
-    subgraph Persistence & Databases
-        Router <-->|State Checkpoints| DDB_Sess["DynamoDB: chat-checkpoints"]
-        Health -->|Connection Pool (IAM Auth)| RDS["Amazon RDS PostgreSQL"]
-        Tool1 -->|SQL Queries| RDS
-        Tool2 -->|SQL Transactions| RDS
-        Tool4 -->|pgvector HNSW Cosine Search| RDS
-        Ingest -->|Vector Inserts| RDS
+    subgraph Databases["Persistence & Databases"]
+        Router -->|"Agent Checkpoints"| DDB_Checkpoints["DynamoDB: chat-checkpoints"]
+        Router -->|"Session Metadata"| DDB_Sessions["DynamoDB: sessions"]
+        Router -->|"Message History"| RDS_Chat["RDS PostgreSQL: chat_messages"]
+        Health -->|"IAM Auth Pool"| RDS["Amazon RDS PostgreSQL"]
+        Tool1 -->|"SQL Queries"| RDS
+        Tool2 -->|"SQL Transactions"| RDS
+        Tool4 -->|"pgvector HNSW Cosine"| RDS
+        Ingest -->|"Vector Inserts"| RDS
     end
 
-    subgraph ITSM Microservice
-        Tool3 -->|HTTPS + x-api-key| APIGW["Amazon API Gateway (HTTP API)"]
-        APIGW -->|Proxy Integration| Lambda["AWS Lambda (itsm_lambda/handler.py)"]
-        Lambda -->|Read / Write| DDB_Tickets["DynamoDB: tickets table"]
+    subgraph ITSM_Service["ITSM Microservice"]
+        Tool3 -->|"HTTPS + x-api-key"| APIGW["Amazon API Gateway (HTTP API)"]
+        APIGW -->|"Proxy Integration"| Lambda["AWS Lambda (skyassist-itsm)"]
+        Lambda -->|"Read / Write"| DDB_Tickets["DynamoDB: tickets table"]
     end
 ```
 
