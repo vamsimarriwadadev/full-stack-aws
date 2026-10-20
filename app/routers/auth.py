@@ -6,26 +6,19 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 # Static users for airline operations login
 STATIC_USERS = {
-    "vamsi": {
-        "user_id": "vamsi",
-        "username": "vamsi",
-        "name": "Vamsi Marriwada",
-        "password": "southwest2026",
-        "role": "Agentic AI Operations Engineer",
+    "guest1": {
+        "user_id": "guest1",
+        "username": "guest1",
+        "name": "Guest 1",
+        "password": "indian2026",
+        "role": "guest",
     },
-    "ops_agent": {
-        "user_id": "ops_agent",
-        "username": "ops_agent",
-        "name": "Ground Operations Agent",
-        "password": "southwest2026",
-        "role": "Gate Operations",
-    },
-    "admin": {
-        "user_id": "admin",
-        "username": "admin",
-        "name": "System Administrator",
-        "password": "southwest2026",
-        "role": "IT Administrator",
+    "guest2": {
+        "user_id": "guest2",
+        "username": "guest2",
+        "name": "Guest 2",
+        "password": "indian2026",
+        "role": "guest",
     },
 }
 
@@ -54,7 +47,7 @@ def get_current_user(authorization: Optional[str] = Header(None)):
     """Validates authorization header token and returns user profile."""
     if not authorization:
         # Default to primary user for smooth local development
-        user = STATIC_USERS["vamsi"]
+        user = STATIC_USERS["guest1"]
     else:
         token = authorization.replace("Bearer ", "").strip()
         matched_user = None
@@ -62,7 +55,7 @@ def get_current_user(authorization: Optional[str] = Header(None)):
             if f"skyassist-token-{u['user_id']}-2026" in token or token == u["user_id"]:
                 matched_user = u
                 break
-        user = matched_user or STATIC_USERS["vamsi"]
+        user = matched_user or STATIC_USERS["guest1"]
 
     return LoginResponse(
         user_id=user["user_id"],

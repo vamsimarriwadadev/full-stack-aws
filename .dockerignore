@@ -1,0 +1,16 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.py[oc]
+*.pyd
+.pytest_cache
+tests
+itsm_lambda
+BUILD_PLAN.md
+README.md
+run.bat
+.env
+.env.*
+*.csv
+*accessKeys*

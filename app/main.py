@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from typing import Dict, Any
 
 from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.logging import setup_logging, request_id_var
@@ -36,6 +37,14 @@ app = FastAPI(
     version="0.1.0",
     debug=settings.DEBUG,
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # or ["http://localhost:5173", "https://india.dev", ...]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -87,6 +96,14 @@ app.include_router(auth.router)
 app.include_router(chat.router, tags=["Chats"])
 app.include_router(ingest.router, tags=["Ingest"])
 app.include_router(mock_itsm.router)
+
+
+from fastapi.responses import FileResponse
+
+@app.get("/", include_in_schema=False)
+def serve_index():
+    """Serves the SkyAssist web user interface."""
+    return FileResponse("index.html")
 
 
 @app.get("/health", tags=["Health"])

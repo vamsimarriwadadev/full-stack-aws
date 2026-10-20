@@ -72,16 +72,16 @@ def test_chat_endpoint_error_handling():
 
 def test_auth_login_success():
     """Test POST /auth/login with valid credentials."""
-    resp = client.post("/auth/login", json={"username": "vamsi", "password": "southwest2026"})
+    resp = client.post("/auth/login", json={"username": "guest1", "password": "indian2026"})
     assert resp.status_code == 200
     data = resp.json()
-    assert data["user_id"] == "vamsi"
+    assert data["user_id"] == "guest1"
     assert "token" in data
 
 
 def test_auth_login_invalid():
     """Test POST /auth/login with bad password."""
-    resp = client.post("/auth/login", json={"username": "vamsi", "password": "wrongpassword"})
+    resp = client.post("/auth/login", json={"username": "guest1", "password": "wrongpassword"})
     assert resp.status_code == 401
 
 
@@ -165,4 +165,44 @@ def test_chat_stream_events():
         assert '"type": "done"' in body
         # Verified save_chat_message was called for both user and assistant
         assert mock_save.call_count == 2
+
+
+def test_chat_rehydrates_from_postgres_when_dynamo_checkpoint_missing():
+    """
+    Test that when a session's DynamoDB checkpoint is expired/empty (e.g. after 2 months),
+    POST /chat automatically re-hydrates prior messages from PostgreSQL and passes full
+    conversation history to the LLM agent.
+    """
+    mock_history = [
+        {"role": "user", "content": "My booking code is CONF1A"},
+        {"role": "assistant", "content": "Found your booking CONF1A for flight WN1234."},
+    ]
+
+    with patch("app.routers.chat.agent.get_state") as mock_get_state, \
+         patch("app.routers.chat.get_session_messages", return_value=mock_history), \
+         patch("app.routers.chat.agent.invoke") as mock_invoke, \
+         patch("app.routers.chat.save_chat_message"), \
+         patch("app.routers.chat.upsert_session"):
+
+        # Simulate empty DynamoDB state (expired checkpoint)
+        mock_empty_state = MagicMock()
+        mock_empty_state.values = {"messages": []}
+        mock_get_state.return_value = mock_empty_state
+
+        mock_invoke.return_value = {
+            "messages": [AIMessage(content="Rescheduled to flight WN5678 successfully.")]
+        }
+
+        resp = client.post("/chat", json={"input": "Change it to tomorrow", "session_id": "two-months-old-sess"})
+        assert resp.status_code == 200
+        assert "Rescheduled" in resp.json()["response"]
+
+        # Verify agent.invoke received the re-hydrated history + current input
+        mock_invoke.assert_called_once()
+        invoked_payload = mock_invoke.call_args[0][0]
+        assert len(invoked_payload["messages"]) == 3
+        assert invoked_payload["messages"][0]["content"] == "My booking code is CONF1A"
+        assert invoked_payload["messages"][1]["content"] == "Found your booking CONF1A for flight WN1234."
+        assert invoked_payload["messages"][2]["content"] == "Change it to tomorrow"
+
 

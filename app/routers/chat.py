@@ -81,15 +81,18 @@ except Exception as e:
 tools = [get_flight_status, change_booking, create_it_ticket, search_knowledge_base]
 
 system_prompt = (
-    "You are SkyAssist, the enterprise Agentic AI assistant for Southwest Airlines. "
+    "You are SkyAssist, the enterprise Agentic AI copilot for Indian Airlines. "
     "You assist passengers and airline personnel with operations, reservations, and IT support.\n"
-    "You have access to 3 primary operational tools:\n"
-    "1. `get_flight_status`: Query real-time flight schedules, delay times, gates, and statuses.\n"
-    "2. `change_booking`: Modify a passenger's confirmed booking to a different flight or date.\n"
-    "3. `create_it_ticket`: Open an IT Service Management incident ticket for equipment errors, scanner issues, or system outages.\n"
-    "4. `search_knowledge_base`: Retrieve company policies, baggage guidelines, or general travel FAQs.\n"
-    "Be professional, accurate, and concise. Always confirm actions with clear details. "
-    "If required information (e.g., booking code, flight number) is missing, politely ask the user."
+    "You have access to 4 operational tools:\n"
+    "1. get_flight_status: Query real-time flight schedules, delay times, gates, and statuses.\n"
+    "2. change_booking: Modify a passenger's confirmed booking to a different flight or date.\n"
+    "3. create_it_ticket: Open an IT Service Management incident ticket for equipment errors, scanner issues, or system outages.\n"
+    "4. search_knowledge_base: Retrieve company policies, baggage guidelines, or general travel FAQs.\n"
+    "IMPORTANT GUIDELINES:\n"
+    "- Always invoke tools directly using native tool calling. NEVER write out function call signatures, code snippets, or Python expressions (e.g., `create_it_ticket(...)` or `get_flight_status(...)`) in your response text to the user.\n"
+    "- Do not mention internal function names to the user. Speak naturally, politely, and professionally.\n"
+    "- Once a tool finishes, provide a helpful natural language confirmation detailing the outcome (such as Ticket ID, status, flight gate, or confirmation code).\n"
+    "- If required information is missing, politely ask the user for it."
 )
 
 agent = create_agent(
@@ -102,6 +105,38 @@ agent = create_agent(
 router = APIRouter()
 
 
+def prepare_agent_messages(session_id: str, new_user_input: str) -> List[Dict[str, str]]:
+    """
+    Determines conversation context for the agent:
+    1. Fast path: If DynamoDB has an active checkpoint with messages, returns only the new user message.
+    2. Auto-rehydrate path: If DynamoDB checkpoint is missing/expired (e.g. after 30+ days / 2 months),
+       loads previous conversation turns from PostgreSQL, restoring complete context indefinitely.
+    """
+    try:
+        state = agent.get_state(config={"configurable": {"thread_id": session_id}})
+        if state and state.values.get("messages"):
+            # DynamoDB checkpoint is warm and active
+            return [{"role": "user", "content": new_user_input}]
+    except Exception as e:
+        logger.warning(f"Could not read checkpointer state for thread {session_id}: {e}")
+
+    # Checkpoint missing or expired in DynamoDB: re-hydrate from PostgreSQL
+    pg_messages = get_session_messages(session_id)
+    if pg_messages:
+        logger.info(f"Re-hydrating {len(pg_messages)} past messages from PostgreSQL for session {session_id}")
+        rehydrated: List[Dict[str, str]] = []
+        for m in pg_messages:
+            role = m.get("role")
+            content = m.get("content", "")
+            if role in ("user", "assistant") and content:
+                rehydrated.append({"role": role, "content": content})
+        rehydrated.append({"role": "user", "content": new_user_input})
+        return rehydrated
+
+    # New session
+    return [{"role": "user", "content": new_user_input}]
+
+
 # =========================================================================
 # 1. Standard Chat (Synchronous / Blocking)
 # =========================================================================
@@ -112,15 +147,19 @@ def chat(payload: ChatInput):
     Standard synchronous chat endpoint.
     Maintains multi-turn context across requests using session_id in DynamoDB
     and permanently stores human-readable chat history in PostgreSQL.
+    Automatically re-hydrates full conversation context from PostgreSQL if DynamoDB checkpoint expired.
     """
     try:
         sid = payload.session_id or uuid.uuid4().hex
         uid = payload.user_id or "vamsi"
         upsert_session(session_id=sid, title=payload.input, user_id=uid)
+
+        # Prepare messages (warm DynamoDB checkpoint or PostgreSQL auto-rehydration)
+        input_messages = prepare_agent_messages(session_id=sid, new_user_input=payload.input)
         save_chat_message(session_id=sid, user_id=uid, role="user", content=payload.input)
 
         result = agent.invoke(
-            {"messages": [{"role": "user", "content": payload.input}]},
+            {"messages": input_messages},
             config={"configurable": {"thread_id": sid}},
         )
 
@@ -160,6 +199,7 @@ async def chat_stream(payload: ChatInput):
     Server-Sent Events (SSE) streaming endpoint.
     Streams real-time token deltas, tool invocation events, and token usage metrics to the UI.
     Persists user & assistant messages into PostgreSQL for UI chat history reload.
+    Automatically re-hydrates full conversation context from PostgreSQL if DynamoDB checkpoint expired.
 
     Event types:
       - 'session': Initial session identifier
@@ -172,6 +212,9 @@ async def chat_stream(payload: ChatInput):
     sid = payload.session_id or uuid.uuid4().hex
     uid = payload.user_id or "vamsi"
     upsert_session(session_id=sid, title=payload.input, user_id=uid)
+
+    # Prepare messages (warm DynamoDB checkpoint or PostgreSQL auto-rehydration)
+    input_messages = prepare_agent_messages(session_id=sid, new_user_input=payload.input)
     save_chat_message(session_id=sid, user_id=uid, role="user", content=payload.input)
 
     async def event_generator():
@@ -184,7 +227,7 @@ async def chat_stream(payload: ChatInput):
 
         try:
             async for event in agent.astream_events(
-                {"messages": [{"role": "user", "content": payload.input}]},
+                {"messages": input_messages},
                 config={"configurable": {"thread_id": sid}},
                 version="v2",
             ):

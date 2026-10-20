@@ -297,4 +297,4 @@ FastAPI interactive Swagger docs: **`http://localhost:8000/docs`**
 ```powershell
 uv run pytest tests/
 ```
-All **23 unit tests** execute cleanly verifying streaming, auth, session history, PostgreSQL message persistence, tools, database queries, and Lambda handlers.
+All **24 unit tests** execute cleanly verifying streaming, auth, session history, auto-rehydration from PostgreSQL, tools, database queries, and Lambda handlers.
